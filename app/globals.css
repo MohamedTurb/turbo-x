@@ -1,0 +1,88 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-display: "Avenir Next", "Segoe UI", ui-sans-serif, system-ui,
+    -apple-system, sans-serif;
+  --font-body: -apple-system, "Segoe UI", ui-sans-serif, system-ui,
+    "Helvetica Neue", Arial, sans-serif;
+}
+
+* {
+  border-color: theme("colors.line");
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background-color: #050505;
+  color: #f2f2f2;
+  font-feature-settings: "ss01" on, "cv01" on;
+}
+
+::selection {
+  background-color: rgba(225, 29, 46, 0.35);
+  color: #ffffff;
+}
+
+/* Subtle noise/grid texture used behind hero sections */
+.bg-noise {
+  background-image: var(--tw-bg-noise, none);
+}
+
+.panel {
+  background-color: rgba(13, 13, 13, 0.8);
+  border: 1px solid #1f1f1f;
+  backdrop-filter: blur(14px);
+}
+
+.panel-glow {
+  position: relative;
+}
+
+.panel-glow::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg, rgba(225, 29, 46, 0.5), rgba(225, 29, 46, 0) 40%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+.focus-ring:focus-visible {
+  outline: 2px solid #e11d2e;
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* thin scrollbars in dark chrome */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: #0a0a0a;
+}
+::-webkit-scrollbar-thumb {
+  background: #262626;
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #333333;
+}
