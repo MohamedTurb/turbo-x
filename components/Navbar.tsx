@@ -15,7 +15,6 @@ interface NavbarProps {
 const studentLinks = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/quizzes", label: "Quizzes" },
-  { href: "/assignments", label: "Assignments" },
   { href: "/grades", label: "Grades" },
 ];
 
