@@ -6,13 +6,18 @@ import { supabaseBrowser } from "@/lib/supabase-browser";
 import Navbar from "@/components/Navbar";
 import EmptyState from "@/components/EmptyState";
 import Loading from "@/components/Loading";
-import type { Profile, QuizAttemptWithQuiz } from "@/lib/types";
+import type {
+  Profile,
+  QuizAttemptWithQuiz,
+  SubmissionWithDetails,
+} from "@/lib/types";
 
 export default function GradesPage() {
   const router = useRouter();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [email, setEmail] = useState("");
   const [attempts, setAttempts] = useState<QuizAttemptWithQuiz[]>([]);
+  const [submissions, setSubmissions] = useState<SubmissionWithDetails[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -44,18 +49,29 @@ export default function GradesPage() {
         return;
       }
 
-      const { data: attemptData, error: attemptError } = await supabase
-        .from("quiz_attempts")
-        .select("*, quiz:quizzes(id, title)")
-        .eq("student_id", userData.user.id)
-        .order("created_at", { ascending: false });
+      const [attemptsRes, submissionsRes] = await Promise.all([
+        supabase
+          .from("quiz_attempts")
+          .select("*, quiz:quizzes(id, title)")
+          .eq("student_id", userData.user.id)
+          .order("created_at", { ascending: false }),
+
+        supabase
+          .from("submissions")
+          .select(
+            `*, assignment:assignments(id, title)`
+          )
+          .eq("student_id", userData.user.id)
+          .order("created_at", { ascending: false }),
+      ]);
 
       if (!active) return;
 
-      if (attemptError) {
+      if (attemptsRes.error || submissionsRes.error) {
         setError("Couldn't load your grades right now.");
       } else {
-        setAttempts((attemptData ?? []) as unknown as QuizAttemptWithQuiz[]);
+        setAttempts((attemptsRes.data ?? []) as QuizAttemptWithQuiz[]);
+        setSubmissions((submissionsRes.data ?? []) as SubmissionWithDetails[]);
       }
 
       setProfile(profileData as Profile);
@@ -83,7 +99,7 @@ export default function GradesPage() {
             Grades
           </h1>
           <p className="mt-1 text-sm text-neutral-500">
-            Every quiz attempt you've recorded.
+            Every quiz attempt you&apos;ve recorded.
           </p>
         </div>
 
@@ -93,47 +109,117 @@ export default function GradesPage() {
           </div>
         )}
 
-        {attempts.length === 0 && !error ? (
-          <EmptyState
-            title="No quiz attempts yet."
-            description="Take a published quiz to see your results here."
-          />
-        ) : (
-          <div className="panel overflow-hidden rounded-2xl">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm">
-                <thead>
-                  <tr className="border-b border-neutral-800 text-xs uppercase tracking-wider text-neutral-500">
-                    <th className="px-5 py-3.5 font-medium">Quiz</th>
-                    <th className="px-5 py-3.5 font-medium">Score</th>
-                    <th className="px-5 py-3.5 font-medium">Total</th>
-                    <th className="px-5 py-3.5 font-medium">Percentage</th>
-                    <th className="px-5 py-3.5 font-medium">Date</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {attempts.map((a) => (
-                    <tr key={a.id} className="border-b border-neutral-900 last:border-0">
-                      <td className="px-5 py-4 text-white">
-                        {a.quiz?.title ?? `Quiz #${a.quiz_id}`}
-                      </td>
-                      <td className="px-5 py-4 text-neutral-300">{a.score}</td>
-                      <td className="px-5 py-4 text-neutral-300">{a.total_points}</td>
-                      <td className="px-5 py-4">
-                        <span className="rounded-full border border-crimson/30 bg-crimson/10 px-2.5 py-1 text-xs text-crimson-bright">
-                          {a.percentage}%
-                        </span>
-                      </td>
-                      <td className="px-5 py-4 text-neutral-500">
-                        {new Date(a.created_at).toLocaleDateString()}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
+        <div className="space-y-8">
+          <section>
+            <h2 className="mb-4 font-display text-lg font-semibold text-white">
+              Quiz Results
+            </h2>
+
+            {attempts.length === 0 && !error ? (
+              <EmptyState
+                title="No quiz attempts yet."
+                description="Take a published quiz to see your results here."
+              />
+            ) : (
+              <div className="panel overflow-hidden rounded-2xl">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-sm">
+                    <thead>
+                      <tr className="border-b border-neutral-800 text-xs uppercase tracking-wider text-neutral-500">
+                        <th className="px-5 py-3.5 font-medium">Quiz</th>
+                        <th className="px-5 py-3.5 font-medium">Score</th>
+                        <th className="px-5 py-3.5 font-medium">Total</th>
+                        <th className="px-5 py-3.5 font-medium">Percentage</th>
+                        <th className="px-5 py-3.5 font-medium">Date</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {attempts.map((a) => (
+                        <tr key={a.id} className="border-b border-neutral-900 last:border-0">
+                          <td className="px-5 py-4 text-white">
+                            {a.quiz?.title ?? `Quiz #${a.quiz_id}`}
+                          </td>
+                          <td className="px-5 py-4 text-neutral-300">{a.score}</td>
+                          <td className="px-5 py-4 text-neutral-300">{a.total_points}</td>
+                          <td className="px-5 py-4">
+                            <span className="rounded-full border border-crimson/30 bg-crimson/10 px-2.5 py-1 text-xs text-crimson-bright">
+                              {a.percentage}%
+                            </span>
+                          </td>
+                          <td className="px-5 py-4 text-neutral-500">
+                            {new Date(a.created_at).toLocaleDateString()}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </section>
+
+          <section>
+            <h2 className="mb-4 font-display text-lg font-semibold text-white">
+              Assignment Grades
+            </h2>
+
+            {submissions.length === 0 && !error ? (
+              <EmptyState
+                title="No assignment submissions yet."
+                description="Upload a solution to an assignment to see its grade here."
+              />
+            ) : (
+              <div className="panel overflow-hidden rounded-2xl">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-sm">
+                    <thead>
+                      <tr className="border-b border-neutral-800 text-xs uppercase tracking-wider text-neutral-500">
+                        <th className="px-5 py-3.5 font-medium">Assignment</th>
+                        <th className="px-5 py-3.5 font-medium">Status</th>
+                        <th className="px-5 py-3.5 font-medium">Grade</th>
+                        <th className="px-5 py-3.5 font-medium">Feedback</th>
+                        <th className="px-5 py-3.5 font-medium">Submitted</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {submissions.map((submission) => (
+                        <tr key={submission.id} className="border-b border-neutral-900 last:border-0 align-top">
+                          <td className="px-5 py-4 text-white">
+                            {submission.assignment?.title ?? `Assignment #${submission.assignment_id}`}
+                          </td>
+                          <td className="px-5 py-4">
+                            <span
+                              className={`rounded-full px-2.5 py-1 text-xs ${
+                                submission.grade === null
+                                  ? "border border-amber-700/40 bg-amber-900/20 text-amber-300"
+                                  : "border border-emerald-700/40 bg-emerald-900/20 text-emerald-300"
+                              }`}
+                            >
+                              {submission.grade === null ? "Pending" : "Graded"}
+                            </span>
+                          </td>
+                          <td className="px-5 py-4 text-neutral-300">
+                            {submission.grade ?? "—"}
+                          </td>
+                          <td className="px-5 py-4 text-neutral-400">
+                            {submission.feedback ? (
+                              <span className="whitespace-pre-wrap">{submission.feedback}</span>
+                            ) : (
+                              "—"
+                            )}
+                          </td>
+                          <td className="px-5 py-4 text-neutral-500">
+                            {new Date(submission.created_at).toLocaleDateString()}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </section>
+        </div>
       </main>
     </div>
   );

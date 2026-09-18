@@ -63,6 +63,20 @@ export interface Submission {
   grade: number | null;
   feedback: string | null;
   created_at: string;
+  graded_at: string | null;
+  graded_by: string | null;
+}
+
+export interface SubmissionWithDetails extends Submission {
+  assignment?: {
+    id: number;
+    title: string;
+    due_date: string | null;
+  } | null;
+  student?: {
+    id: string;
+    full_name: string | null;
+  } | null;
 }
 
 export interface QuestionDraft {

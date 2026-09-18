@@ -127,7 +127,7 @@ export default function DashboardPage() {
             Welcome back, {profile.full_name?.split(" ")[0] ?? "there"}
           </h1>
           <p className="mt-1 text-sm text-neutral-500">
-            Here's where things stand across your quizzes and assignments.
+            Here&apos;s where things stand across your quizzes and assignments.
           </p>
         </div>
 

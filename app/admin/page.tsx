@@ -10,13 +10,20 @@ import StatCard from "@/components/StatCard";
 import QuizForm from "@/components/QuizForm";
 import Loading from "@/components/Loading";
 import EmptyState from "@/components/EmptyState";
-import type { Assignment, Profile, Quiz } from "@/lib/types";
+import SubmissionReview from "@/components/SubmissionReview";
+import type {
+  Assignment,
+  Profile,
+  Quiz,
+  SubmissionWithDetails,
+} from "@/lib/types";
 
 interface AdminStats {
   totalStudents: number;
   totalQuizzes: number;
   publishedQuizzes: number;
   totalAttempts: number;
+  pendingSubmissions: number;
 }
 
 export default function AdminPage() {
@@ -30,14 +37,20 @@ export default function AdminPage() {
     totalQuizzes: 0,
     publishedQuizzes: 0,
     totalAttempts: 0,
+    pendingSubmissions: 0,
   });
 
   const [quizzes, setQuizzes] = useState<Quiz[]>([]);
   const [students, setStudents] = useState<Profile[]>([]);
   const [assignments, setAssignments] = useState<Assignment[]>([]);
+  const [submissions, setSubmissions] = useState<SubmissionWithDetails[]>([]);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  const [selectedSubmission, setSelectedSubmission] = useState<SubmissionWithDetails | null>(null);
+  const [reviewOpen, setReviewOpen] = useState(false);
 
   const [showForm, setShowForm] = useState(false);
   const [showAssignmentForm, setShowAssignmentForm] = useState(false);
@@ -66,6 +79,7 @@ export default function AdminPage() {
       studentsRes,
       attemptsRes,
       assignmentsRes,
+      submissionsRes,
     ] = await Promise.all([
       supabase
         .from("quizzes")
@@ -86,17 +100,28 @@ export default function AdminPage() {
         .from("assignments")
         .select("*")
         .order("created_at", { ascending: false }),
+
+      supabase
+        .from("submissions")
+        .select(
+          `*,
+          assignment:assignments(id, title, due_date),
+          student:profiles(id, full_name)`
+        )
+        .order("created_at", { ascending: false }),
     ]);
 
     if (
       quizzesRes.error ||
       studentsRes.error ||
-      assignmentsRes.error
+      assignmentsRes.error ||
+      submissionsRes.error
     ) {
       console.error(
         quizzesRes.error ||
           studentsRes.error ||
-          assignmentsRes.error
+          assignmentsRes.error ||
+          submissionsRes.error
       );
 
       setError("Couldn't load admin data right now.");
@@ -105,20 +130,20 @@ export default function AdminPage() {
 
     const quizList = (quizzesRes.data ?? []) as Quiz[];
     const studentList = (studentsRes.data ?? []) as Profile[];
-    const assignmentList = (assignmentsRes.data ??
-      []) as Assignment[];
+    const assignmentList = (assignmentsRes.data ?? []) as Assignment[];
+    const submissionList = (submissionsRes.data ?? []) as SubmissionWithDetails[];
 
     setQuizzes(quizList);
     setStudents(studentList);
     setAssignments(assignmentList);
+    setSubmissions(submissionList);
 
     setStats({
       totalStudents: studentList.length,
       totalQuizzes: quizList.length,
-      publishedQuizzes: quizList.filter(
-        (q) => q.published
-      ).length,
+      publishedQuizzes: quizList.filter((q) => q.published).length,
       totalAttempts: attemptsRes.count ?? 0,
+      pendingSubmissions: submissionList.filter((submission) => submission.grade === null).length,
     });
   }, []);
 
@@ -372,35 +397,72 @@ export default function AdminPage() {
     }
   }
 
+  async function handleGradeSave(
+    submissionId: number,
+    grade: number,
+    feedback: string | null
+  ) {
+    const supabase = supabaseBrowser();
+    const { data: userData, error: userError } = await supabase.auth.getUser();
+
+    if (userError || !userData.user) {
+      throw new Error("Your session has expired. Please sign in again.");
+    }
+
+    if (!Number.isFinite(grade) || grade < 0) {
+      throw new Error("Grade must be a non-negative number.");
+    }
+
+    const { error } = await supabase
+      .from("submissions")
+      .update({
+        grade,
+        feedback,
+        graded_at: new Date().toISOString(),
+        graded_by: userData.user.id,
+      })
+      .eq("id", submissionId);
+
+    if (error) {
+      throw new Error(error.message || "Couldn't save the grade.");
+    }
+
+    setSubmissions((current) =>
+      current.map((submission) =>
+        submission.id === submissionId
+          ? {
+              ...submission,
+              grade,
+              feedback,
+              graded_at: new Date().toISOString(),
+              graded_by: userData.user.id,
+            }
+          : submission
+      )
+    );
+
+    setSuccessMessage("Submission graded successfully.");
+    setError(null);
+    await loadAdminData();
+  }
+
   function exportStudents() {
     setExporting(true);
 
     try {
       const rows = students.map((s, i) => ({
         "#": i + 1,
+        "Student ID": s.id,
         Name: s.full_name ?? "—",
-        Email: s.email ?? "—",
         Role: s.role,
-        "Created At": new Date(
-          s.created_at
-        ).toLocaleString(),
+        "Created At": new Date(s.created_at).toLocaleString(),
       }));
 
-      const worksheet =
-        XLSX.utils.json_to_sheet(rows);
-
+      const worksheet = XLSX.utils.json_to_sheet(rows);
       const workbook = XLSX.utils.book_new();
 
-      XLSX.utils.book_append_sheet(
-        workbook,
-        worksheet,
-        "Students"
-      );
-
-      XLSX.writeFile(
-        workbook,
-        "TurboX-Students.xlsx"
-      );
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Students");
+      XLSX.writeFile(workbook, "TurboX-Students.xlsx");
     } finally {
       setExporting(false);
     }
@@ -492,8 +554,22 @@ export default function AdminPage() {
           </div>
         )}
 
+        {successMessage && (
+          <div className="mb-6 flex items-center justify-between gap-4 rounded-lg border border-emerald-700/40 bg-emerald-900/20 px-4 py-3 text-sm text-emerald-300">
+            <span>{successMessage}</span>
+
+            <button
+              type="button"
+              onClick={() => setSuccessMessage(null)}
+              className="text-xs text-neutral-400 hover:text-white"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+
         {/* STATS */}
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-5">
           <StatCard
             label="Total Students"
             value={stats.totalStudents}
@@ -512,6 +588,11 @@ export default function AdminPage() {
           <StatCard
             label="Total Attempts"
             value={stats.totalAttempts}
+          />
+
+          <StatCard
+            label="Pending Submissions"
+            value={stats.pendingSubmissions}
           />
         </div>
 
@@ -922,6 +1003,84 @@ export default function AdminPage() {
           )}
         </section>
 
+        {/* ASSIGNMENT SUBMISSIONS */}
+        <section className="mt-10">
+          <h2 className="mb-4 font-display text-lg font-semibold text-white">
+            Assignment Submissions
+          </h2>
+
+          {submissions.length === 0 ? (
+            <EmptyState
+              title="No submissions yet."
+              description="Student assignment uploads will appear here for review."
+            />
+          ) : (
+            <div className="panel overflow-hidden rounded-2xl">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-neutral-800 text-xs uppercase tracking-wider text-neutral-500">
+                      <th className="px-5 py-3.5 font-medium">Student</th>
+                      <th className="px-5 py-3.5 font-medium">Assignment</th>
+                      <th className="px-5 py-3.5 font-medium">Submitted</th>
+                      <th className="px-5 py-3.5 font-medium">Status</th>
+                      <th className="px-5 py-3.5 font-medium">Grade</th>
+                      <th className="px-5 py-3.5 text-right font-medium">Action</th>
+                    </tr>
+                  </thead>
+
+                  <tbody>
+                    {submissions.map((submission) => (
+                      <tr
+                        key={submission.id}
+                        className="border-b border-neutral-900 last:border-0"
+                      >
+                        <td className="px-5 py-4 text-white">
+                          {submission.student?.full_name ?? "Unknown student"}
+                        </td>
+                        <td className="px-5 py-4 text-neutral-300">
+                          {submission.assignment?.title ?? `Assignment #${submission.assignment_id}`}
+                        </td>
+                        <td className="px-5 py-4 text-neutral-500">
+                          {new Date(submission.created_at).toLocaleString()}
+                        </td>
+                        <td className="px-5 py-4">
+                          <span
+                            className={`rounded-full px-2.5 py-1 text-xs ${
+                              submission.grade === null
+                                ? "border border-amber-700/40 bg-amber-900/20 text-amber-300"
+                                : "border border-emerald-700/40 bg-emerald-900/20 text-emerald-300"
+                            }`}
+                          >
+                            {submission.grade === null ? "Pending Review" : "Graded"}
+                          </span>
+                        </td>
+                        <td className="px-5 py-4 text-neutral-300">
+                          {submission.grade === null ? "—" : submission.grade}
+                        </td>
+                        <td className="px-5 py-4">
+                          <div className="flex justify-end">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedSubmission(submission);
+                                setReviewOpen(true);
+                              }}
+                              className="rounded-md border border-neutral-800 px-2.5 py-1.5 text-xs text-neutral-300 hover:border-crimson/50 hover:text-white"
+                            >
+                              Review
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </section>
+
         {/* STUDENTS */}
         <section className="mt-10">
           <h2 className="mb-4 font-display text-lg font-semibold text-white">
@@ -945,7 +1104,7 @@ export default function AdminPage() {
                       </th>
 
                       <th className="px-5 py-3.5 font-medium">
-                        Email
+                        Student ID
                       </th>
 
                       <th className="px-5 py-3.5 font-medium">
@@ -973,7 +1132,7 @@ export default function AdminPage() {
                         </td>
 
                         <td className="px-5 py-4 text-neutral-500">
-                          {s.email ?? "—"}
+                          {s.id}
                         </td>
 
                         <td className="px-5 py-4 capitalize text-neutral-400">
@@ -994,6 +1153,16 @@ export default function AdminPage() {
           )}
         </section>
       </main>
+
+      <SubmissionReview
+        submission={selectedSubmission}
+        open={reviewOpen}
+        onClose={() => {
+          setReviewOpen(false);
+          setSelectedSubmission(null);
+        }}
+        onSave={handleGradeSave}
+      />
     </div>
   );
 }
