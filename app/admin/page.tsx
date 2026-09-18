@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import * as XLSX from "xlsx";
@@ -15,6 +15,7 @@ import type {
   Assignment,
   Profile,
   Quiz,
+  QuizAttemptWithDetails,
   SubmissionWithDetails,
 } from "@/lib/types";
 
@@ -24,6 +25,40 @@ interface AdminStats {
   publishedQuizzes: number;
   totalAttempts: number;
   pendingSubmissions: number;
+  averageQuizScore: number;
+}
+
+function formatSupabaseError(
+  queryName: string,
+  error: {
+    message: string;
+    code?: string;
+    details?: string;
+    hint?: string;
+  }
+) {
+  console.error(`❌ ${queryName} ERROR`, {
+    message: error.message,
+    code: error.code ?? "unknown",
+    details: error.details ?? "none",
+    hint: error.hint ?? "none",
+  });
+
+  const parts = [`${queryName}: ${error.message}`];
+
+  if (error.code) {
+    parts.push(`code ${error.code}`);
+  }
+
+  if (error.details) {
+    parts.push(error.details);
+  }
+
+  if (error.hint) {
+    parts.push(`Hint: ${error.hint}`);
+  }
+
+  return parts.join(". ");
 }
 
 export default function AdminPage() {
@@ -38,11 +73,13 @@ export default function AdminPage() {
     publishedQuizzes: 0,
     totalAttempts: 0,
     pendingSubmissions: 0,
+    averageQuizScore: 0,
   });
 
   const [quizzes, setQuizzes] = useState<Quiz[]>([]);
   const [students, setStudents] = useState<Profile[]>([]);
   const [assignments, setAssignments] = useState<Assignment[]>([]);
+  const [quizAttempts, setQuizAttempts] = useState<QuizAttemptWithDetails[]>([]);
   const [submissions, setSubmissions] = useState<SubmissionWithDetails[]>([]);
 
   const [loading, setLoading] = useState(true);
@@ -51,6 +88,7 @@ export default function AdminPage() {
 
   const [selectedSubmission, setSelectedSubmission] = useState<SubmissionWithDetails | null>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
+  const [selectedAttempt, setSelectedAttempt] = useState<QuizAttemptWithDetails | null>(null);
 
   const [showForm, setShowForm] = useState(false);
   const [showAssignmentForm, setShowAssignmentForm] = useState(false);
@@ -60,6 +98,10 @@ export default function AdminPage() {
     useState<number | null>(null);
 
   const [exporting, setExporting] = useState(false);
+
+  const [resultSearch, setResultSearch] = useState("");
+  const [resultQuizFilter, setResultQuizFilter] = useState("all");
+  const [resultStatusFilter, setResultStatusFilter] = useState("all");
 
   // Assignment form
   const [assignmentTitle, setAssignmentTitle] = useState("");
@@ -94,7 +136,12 @@ export default function AdminPage() {
 
       supabase
         .from("quiz_attempts")
-        .select("id", { count: "exact", head: true }),
+        .select(
+          `*,
+          quiz:quizzes!quiz_attempts_quiz_id_fkey(id, title),
+          student:profiles!quiz_attempts_student_id_fkey(id, full_name)`
+        )
+        .order("created_at", { ascending: false }),
 
       supabase
         .from("assignments")
@@ -103,47 +150,98 @@ export default function AdminPage() {
 
       supabase
         .from("submissions")
-        .select(
-          `*,
-          assignment:assignments(id, title, due_date),
-          student:profiles(id, full_name)`
-        )
+        .select("*")
         .order("created_at", { ascending: false }),
     ]);
 
-    if (
-      quizzesRes.error ||
-      studentsRes.error ||
-      assignmentsRes.error ||
-      submissionsRes.error
-    ) {
-      console.error(
-        quizzesRes.error ||
-          studentsRes.error ||
-          assignmentsRes.error ||
-          submissionsRes.error
-      );
+    const queryErrors: string[] = [];
 
-      setError("Couldn't load admin data right now.");
+    if (quizzesRes.error) {
+      queryErrors.push(formatSupabaseError("QUIZZES", quizzesRes.error));
+    }
+
+    if (studentsRes.error) {
+      queryErrors.push(formatSupabaseError("STUDENTS", studentsRes.error));
+    }
+
+    if (attemptsRes.error) {
+      queryErrors.push(formatSupabaseError("QUIZ RESULTS", attemptsRes.error));
+    }
+
+    if (assignmentsRes.error) {
+      queryErrors.push(
+        formatSupabaseError("ASSIGNMENTS", assignmentsRes.error)
+      );
+    }
+
+    if (submissionsRes.error) {
+      queryErrors.push(
+        formatSupabaseError("SUBMISSIONS", submissionsRes.error)
+      );
+    }
+
+    let submissionList: SubmissionWithDetails[] = [];
+
+    if (!submissionsRes.error) {
+      const relationalSubmissionsRes = await supabase
+        .from("submissions")
+        .select(
+          `*,
+          assignment:assignments(id, title, due_date),
+          student:profiles!submissions_student_id_fkey(id, full_name)`
+        )
+        .order("created_at", { ascending: false });
+
+      if (relationalSubmissionsRes.error) {
+        queryErrors.push(
+          formatSupabaseError(
+            "SUBMISSIONS RELATIONSHIP",
+            relationalSubmissionsRes.error
+          )
+        );
+      } else {
+        submissionList = (relationalSubmissionsRes.data ??
+          []) as SubmissionWithDetails[];
+      }
+    }
+
+    if (queryErrors.length > 0) {
+      setError(
+        process.env.NODE_ENV === "development"
+          ? queryErrors.join(" | ")
+          : "Couldn't load admin data right now."
+      );
       return;
     }
 
     const quizList = (quizzesRes.data ?? []) as Quiz[];
     const studentList = (studentsRes.data ?? []) as Profile[];
     const assignmentList = (assignmentsRes.data ?? []) as Assignment[];
-    const submissionList = (submissionsRes.data ?? []) as SubmissionWithDetails[];
+    const attemptList = (attemptsRes.data ?? []) as QuizAttemptWithDetails[];
 
     setQuizzes(quizList);
     setStudents(studentList);
     setAssignments(assignmentList);
+    setQuizAttempts(attemptList);
     setSubmissions(submissionList);
 
     setStats({
       totalStudents: studentList.length,
       totalQuizzes: quizList.length,
       publishedQuizzes: quizList.filter((q) => q.published).length,
-      totalAttempts: attemptsRes.count ?? 0,
+      totalAttempts: attemptList.length,
       pendingSubmissions: submissionList.filter((submission) => submission.grade === null).length,
+      averageQuizScore:
+        attemptList.length > 0
+          ? Math.round(
+              (attemptList.reduce(
+                (total, attempt) => total + Number(attempt.percentage),
+                0
+              ) /
+                attemptList.length) *
+                10
+            ) / 10
+          : 0,
     });
   }, []);
 
@@ -446,6 +544,79 @@ export default function AdminPage() {
     await loadAdminData();
   }
 
+  const filteredQuizAttempts = useMemo(() => {
+    const normalizedSearch = resultSearch.trim().toLowerCase();
+
+    return quizAttempts.filter((attempt) => {
+      const studentName = attempt.student?.full_name ?? "Unknown student";
+      const percentage = Number(attempt.percentage);
+      const status = percentage >= 85
+        ? "strong"
+        : percentage >= 60
+        ? "passing"
+        : "warning";
+
+      const matchesSearch =
+        normalizedSearch.length === 0 ||
+        studentName.toLowerCase().includes(normalizedSearch) ||
+        (attempt.quiz?.title ?? "").toLowerCase().includes(normalizedSearch);
+      const matchesQuiz =
+        resultQuizFilter === "all" || String(attempt.quiz_id) === resultQuizFilter;
+      const matchesStatus =
+        resultStatusFilter === "all" || status === resultStatusFilter;
+
+      return matchesSearch && matchesQuiz && matchesStatus;
+    });
+  }, [quizAttempts, resultQuizFilter, resultSearch, resultStatusFilter]);
+
+  function getResultStatus(percentage: number) {
+    if (percentage >= 85) {
+      return {
+        label: "Strong",
+        className: "border border-emerald-700/40 bg-emerald-900/20 text-emerald-300",
+      };
+    }
+
+    if (percentage >= 60) {
+      return {
+        label: "Passing",
+        className: "border border-sky-700/40 bg-sky-900/20 text-sky-300",
+      };
+    }
+
+    return {
+      label: "Needs Review",
+      className: "border border-amber-700/40 bg-amber-900/20 text-amber-300",
+    };
+  }
+
+  function exportQuizResults() {
+    if (quizAttempts.length === 0) {
+      return;
+    }
+
+    setExporting(true);
+
+    try {
+      const rows = quizAttempts.map((attempt) => ({
+        Student: attempt.student?.full_name ?? "Unknown student",
+        Quiz: attempt.quiz?.title ?? `Quiz #${attempt.quiz_id}`,
+        Score: attempt.score,
+        "Total Points": attempt.total_points,
+        Percentage: `${attempt.percentage}%`,
+        "Attempt Date": new Date(attempt.created_at).toLocaleString(),
+      }));
+
+      const worksheet = XLSX.utils.json_to_sheet(rows);
+      const workbook = XLSX.utils.book_new();
+
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Quiz Results");
+      XLSX.writeFile(workbook, "TurboX-Quiz-Results.xlsx");
+    } finally {
+      setExporting(false);
+    }
+  }
+
   function exportStudents() {
     setExporting(true);
 
@@ -536,6 +707,14 @@ export default function AdminPage() {
                 ? "Exporting…"
                 : "Export Students Excel"}
             </button>
+
+            <button
+              onClick={exportQuizResults}
+              disabled={exporting || quizAttempts.length === 0}
+              className="focus-ring rounded-lg border border-neutral-800 px-4 py-2.5 text-sm text-neutral-300 hover:border-crimson/50 hover:text-white disabled:opacity-50"
+            >
+              {exporting ? "Exporting…" : "Export Quiz Results"}
+            </button>
           </div>
         </div>
 
@@ -569,7 +748,7 @@ export default function AdminPage() {
         )}
 
         {/* STATS */}
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-5">
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
           <StatCard
             label="Total Students"
             value={stats.totalStudents}
@@ -593,6 +772,12 @@ export default function AdminPage() {
           <StatCard
             label="Pending Submissions"
             value={stats.pendingSubmissions}
+          />
+
+          <StatCard
+            label="Average Quiz Score"
+            value={stats.averageQuizScore}
+            suffix="%"
           />
         </div>
 
@@ -864,6 +1049,143 @@ export default function AdminPage() {
                         </td>
                       </tr>
                     ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </section>
+
+        {/* QUIZ RESULTS */}
+        <section className="mt-10">
+          <div className="mb-4 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <h2 className="font-display text-lg font-semibold text-white">
+                Quiz Results
+              </h2>
+
+              <p className="mt-1 text-sm text-neutral-500">
+                Review student quiz and exam attempts.
+              </p>
+            </div>
+
+            <div className="grid gap-2 sm:grid-cols-3">
+              <label className="sr-only" htmlFor="result-search">
+                Search quiz results
+              </label>
+              <input
+                id="result-search"
+                type="search"
+                value={resultSearch}
+                onChange={(event) => setResultSearch(event.target.value)}
+                placeholder="Search student or quiz"
+                className="focus-ring rounded-lg border border-neutral-800 bg-neutral-950 px-3 py-2 text-xs text-white outline-none placeholder:text-neutral-600"
+              />
+
+              <label className="sr-only" htmlFor="result-quiz-filter">
+                Filter quiz results by quiz
+              </label>
+              <select
+                id="result-quiz-filter"
+                value={resultQuizFilter}
+                onChange={(event) => setResultQuizFilter(event.target.value)}
+                className="focus-ring rounded-lg border border-neutral-800 bg-neutral-950 px-3 py-2 text-xs text-neutral-300 outline-none"
+              >
+                <option value="all">All quizzes</option>
+                {quizzes.map((quiz) => (
+                  <option key={quiz.id} value={quiz.id}>
+                    {quiz.title}
+                  </option>
+                ))}
+              </select>
+
+              <label className="sr-only" htmlFor="result-status-filter">
+                Filter quiz results by status
+              </label>
+              <select
+                id="result-status-filter"
+                value={resultStatusFilter}
+                onChange={(event) => setResultStatusFilter(event.target.value)}
+                className="focus-ring rounded-lg border border-neutral-800 bg-neutral-950 px-3 py-2 text-xs text-neutral-300 outline-none"
+              >
+                <option value="all">All statuses</option>
+                <option value="strong">Strong</option>
+                <option value="passing">Passing</option>
+                <option value="warning">Needs Review</option>
+              </select>
+            </div>
+          </div>
+
+          {quizAttempts.length === 0 ? (
+            <EmptyState
+              title="No quiz results yet."
+              description="Student quiz attempts will appear here after submission."
+            />
+          ) : filteredQuizAttempts.length === 0 ? (
+            <EmptyState
+              title="No matching results."
+              description="Try adjusting the search or filters."
+            />
+          ) : (
+            <div className="panel overflow-hidden rounded-2xl">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-neutral-800 text-xs uppercase tracking-wider text-neutral-500">
+                      <th className="px-5 py-3.5 font-medium">Student</th>
+                      <th className="px-5 py-3.5 font-medium">Quiz</th>
+                      <th className="px-5 py-3.5 font-medium">Score</th>
+                      <th className="px-5 py-3.5 font-medium">Total</th>
+                      <th className="px-5 py-3.5 font-medium">Percentage</th>
+                      <th className="px-5 py-3.5 font-medium">Submitted</th>
+                      <th className="px-5 py-3.5 text-right font-medium">Action</th>
+                    </tr>
+                  </thead>
+
+                  <tbody>
+                    {filteredQuizAttempts.map((attempt) => {
+                      const percentage = Number(attempt.percentage);
+                      const status = getResultStatus(percentage);
+
+                      return (
+                        <tr
+                          key={attempt.id}
+                          className="border-b border-neutral-900 last:border-0"
+                        >
+                          <td className="px-5 py-4 text-white">
+                            {attempt.student?.full_name ?? "Unknown student"}
+                          </td>
+                          <td className="px-5 py-4 text-neutral-300">
+                            {attempt.quiz?.title ?? `Quiz #${attempt.quiz_id}`}
+                          </td>
+                          <td className="px-5 py-4 text-neutral-300">
+                            {attempt.score}
+                          </td>
+                          <td className="px-5 py-4 text-neutral-300">
+                            {attempt.total_points}
+                          </td>
+                          <td className="px-5 py-4">
+                            <span className={`rounded-full px-2.5 py-1 text-xs ${status.className}`}>
+                              {percentage}%
+                            </span>
+                          </td>
+                          <td className="px-5 py-4 text-neutral-500">
+                            {new Date(attempt.created_at).toLocaleString()}
+                          </td>
+                          <td className="px-5 py-4">
+                            <div className="flex justify-end">
+                              <button
+                                type="button"
+                                onClick={() => setSelectedAttempt(attempt)}
+                                className="rounded-md border border-neutral-800 px-2.5 py-1.5 text-xs text-neutral-300 hover:border-crimson/50 hover:text-white"
+                              >
+                                View
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -1153,6 +1475,93 @@ export default function AdminPage() {
           )}
         </section>
       </main>
+
+      {selectedAttempt && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 px-4 backdrop-blur-sm">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="quiz-result-title"
+            className="w-full max-w-lg rounded-3xl border border-white/10 bg-slate-900 p-6 shadow-2xl sm:p-8"
+          >
+            <div className="mb-6 flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs uppercase tracking-[0.18em] text-neutral-500">
+                  Quiz result
+                </p>
+                <h2
+                  id="quiz-result-title"
+                  className="mt-2 font-display text-2xl font-semibold text-white"
+                >
+                  {selectedAttempt.quiz?.title ?? `Quiz #${selectedAttempt.quiz_id}`}
+                </h2>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setSelectedAttempt(null)}
+                className="rounded-lg border border-neutral-800 px-3 py-1.5 text-sm text-neutral-300 hover:border-neutral-600 hover:text-white"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="rounded-2xl border border-neutral-800 bg-neutral-950/60 p-4">
+                <p className="text-xs uppercase tracking-wider text-neutral-500">
+                  Student
+                </p>
+                <p className="mt-2 text-sm font-medium text-white">
+                  {selectedAttempt.student?.full_name ?? "Unknown student"}
+                </p>
+              </div>
+
+              <div className="rounded-2xl border border-neutral-800 bg-neutral-950/60 p-4">
+                <p className="text-xs uppercase tracking-wider text-neutral-500">
+                  Attempt Date
+                </p>
+                <p className="mt-2 text-sm font-medium text-white">
+                  {new Date(selectedAttempt.created_at).toLocaleString()}
+                </p>
+              </div>
+
+              <div className="rounded-2xl border border-neutral-800 bg-neutral-950/60 p-4">
+                <p className="text-xs uppercase tracking-wider text-neutral-500">
+                  Score
+                </p>
+                <p className="mt-2 text-2xl font-black text-white">
+                  {selectedAttempt.score}
+                </p>
+              </div>
+
+              <div className="rounded-2xl border border-neutral-800 bg-neutral-950/60 p-4">
+                <p className="text-xs uppercase tracking-wider text-neutral-500">
+                  Total Points
+                </p>
+                <p className="mt-2 text-2xl font-black text-white">
+                  {selectedAttempt.total_points}
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-5 rounded-2xl border border-crimson/20 bg-crimson/10 p-5">
+              <p className="text-xs uppercase tracking-wider text-neutral-500">
+                Percentage
+              </p>
+              <div className="mt-2 flex items-center justify-between gap-4">
+                <p className="text-3xl font-black text-white">
+                  {selectedAttempt.percentage}%
+                </p>
+                <span
+                  className={`rounded-full px-2.5 py-1 text-xs ${getResultStatus(Number(selectedAttempt.percentage)).className}`}
+                >
+                  {getResultStatus(Number(selectedAttempt.percentage)).label}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <SubmissionReview
         submission={selectedSubmission}

@@ -46,6 +46,17 @@ export interface QuizAttemptWithQuiz extends QuizAttempt {
   quiz?: Pick<Quiz, "id" | "title">;
 }
 
+export interface QuizAttemptWithDetails extends QuizAttempt {
+  quiz?: {
+    id: number;
+    title: string;
+  } | null;
+  student?: {
+    id: string;
+    full_name: string | null;
+  } | null;
+}
+
 export interface Assignment {
   id: number;
   title: string;

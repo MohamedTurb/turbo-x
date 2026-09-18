@@ -57,8 +57,17 @@ create table if not exists public.submissions (
   file_path text,
   grade numeric,
   feedback text,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  graded_at timestamptz,
+  graded_by uuid references public.profiles(id) on delete set null
 );
+
+-- Keep existing databases compatible with the grading workflow.
+alter table public.submissions
+  add column if not exists graded_at timestamptz;
+
+alter table public.submissions
+  add column if not exists graded_by uuid references public.profiles(id) on delete set null;
 
 -- Helpful indexes
 create index if not exists idx_questions_quiz_id on public.questions(quiz_id);
