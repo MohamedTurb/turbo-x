@@ -14,6 +14,7 @@ import SubmissionReview from "@/components/SubmissionReview";
 import type {
   Assignment,
   Profile,
+  QuestionDraft,
   Quiz,
   QuizAttemptWithDetails,
   SubmissionWithDetails,
@@ -92,6 +93,9 @@ export default function AdminPage() {
 
   const [showForm, setShowForm] = useState(false);
   const [showAssignmentForm, setShowAssignmentForm] = useState(false);
+  const [editingQuiz, setEditingQuiz] = useState<Quiz | null>(null);
+  const [editingQuizQuestions, setEditingQuizQuestions] = useState<QuestionDraft[]>([]);
+  const [editingAssignment, setEditingAssignment] = useState<Assignment | null>(null);
 
   const [busyQuizId, setBusyQuizId] = useState<number | null>(null);
   const [busyAssignmentId, setBusyAssignmentId] =
@@ -296,6 +300,64 @@ export default function AdminPage() {
     };
   }, [router, loadAdminData]);
 
+  function resetAssignmentForm() {
+    setAssignmentTitle("");
+    setAssignmentDescription("");
+    setAssignmentDueDate("");
+    setAssignmentFile(null);
+    setEditingAssignment(null);
+
+    const fileInput = document.getElementById(
+      "assignment-file"
+    ) as HTMLInputElement | null;
+
+    if (fileInput) {
+      fileInput.value = "";
+    }
+  }
+
+  async function openEditQuiz(quiz: Quiz) {
+    const supabase = supabaseBrowser();
+
+    const { data: questionsData, error: questionsError } = await supabase
+      .from("questions")
+      .select("*")
+      .eq("quiz_id", quiz.id)
+      .order("id", { ascending: true });
+
+    if (questionsError) {
+      setError("Couldn't load this quiz for editing.");
+      return;
+    }
+
+    setEditingQuiz(quiz);
+    setEditingQuizQuestions(
+      (questionsData ?? []).map((question) => ({
+        question_text: question.question_text,
+        option_1: question.options?.[0] ?? "",
+        option_2: question.options?.[1] ?? "",
+        option_3: question.options?.[2] ?? "",
+        option_4: question.options?.[3] ?? "",
+        correct_answer: question.correct_answer,
+        points: Number(question.points) || 1,
+      }))
+    );
+    setShowForm(true);
+  }
+
+  function openEditAssignment(assignment: Assignment) {
+    setEditingAssignment(assignment);
+    setAssignmentTitle(assignment.title);
+    setAssignmentDescription(assignment.description ?? "");
+    setAssignmentDueDate(
+      assignment.due_date
+        ? new Date(assignment.due_date).toISOString().slice(0, 16)
+        : ""
+    );
+    setAssignmentFile(null);
+    setShowAssignmentForm(true);
+  }
+
   async function togglePublish(quiz: Quiz) {
     setBusyQuizId(quiz.id);
 
@@ -348,7 +410,7 @@ export default function AdminPage() {
     setBusyQuizId(null);
   }
 
-  async function createAssignment() {
+  async function saveAssignment() {
     setError(null);
 
     if (!assignmentTitle.trim()) {
@@ -356,7 +418,7 @@ export default function AdminPage() {
       return;
     }
 
-    if (!assignmentFile) {
+    if (!assignmentFile && !editingAssignment) {
       setError("Please choose an assignment file.");
       return;
     }
@@ -365,81 +427,113 @@ export default function AdminPage() {
 
     try {
       const supabase = supabaseBrowser();
+      let finalFilePath = editingAssignment?.file_path ?? null;
+      let uploadedNewFile = false;
 
-      const fileExtension =
-        assignmentFile.name.includes(".")
-          ? assignmentFile.name.split(".").pop()
+      if (assignmentFile) {
+        const fileExtension =
+          assignmentFile.name.includes(".")
+            ? assignmentFile.name.split(".").pop()
+            : "";
+
+        const safeExtension = fileExtension
+          ? `.${fileExtension}`
           : "";
 
-      const safeExtension = fileExtension
-        ? `.${fileExtension}`
-        : "";
+        const newFilePath = `assignment-files/${crypto.randomUUID()}${safeExtension}`;
 
-      const fileName = `${crypto.randomUUID()}${safeExtension}`;
+        if (editingAssignment?.file_path) {
+          const { error: removeError } = await supabase.storage
+            .from("assignments")
+            .remove([editingAssignment.file_path]);
 
-      const filePath = `assignment-files/${fileName}`;
+          if (removeError) {
+            console.error(removeError);
+          }
+        }
 
-      const { error: uploadError } = await supabase.storage
-        .from("assignments")
-        .upload(filePath, assignmentFile, {
-          cacheControl: "3600",
-          upsert: false,
-        });
-
-      if (uploadError) {
-        console.error(uploadError);
-        setError(
-          `Couldn't upload the file: ${uploadError.message}`
-        );
-        return;
-      }
-
-      const { error: insertError } = await supabase
-        .from("assignments")
-        .insert({
-          title: assignmentTitle.trim(),
-          description:
-            assignmentDescription.trim() || null,
-          file_path: filePath,
-          due_date: assignmentDueDate
-            ? new Date(assignmentDueDate).toISOString()
-            : null,
-        });
-
-      if (insertError) {
-        console.error(insertError);
-
-        await supabase.storage
+        const { error: uploadError } = await supabase.storage
           .from("assignments")
-          .remove([filePath]);
+          .upload(newFilePath, assignmentFile, {
+            cacheControl: "3600",
+            upsert: false,
+          });
+
+        if (uploadError) {
+          console.error(uploadError);
+          setError(
+            `Couldn't upload the file: ${uploadError.message}`
+          );
+          return;
+        }
+
+        finalFilePath = newFilePath;
+        uploadedNewFile = true;
+      }
+
+      const payload = {
+        title: assignmentTitle.trim(),
+        description: assignmentDescription.trim() || null,
+        file_path: finalFilePath,
+        due_date: assignmentDueDate
+          ? new Date(assignmentDueDate).toISOString()
+          : null,
+      };
+
+      let assignmentError;
+
+      if (editingAssignment) {
+        const result = await supabase
+          .from("assignments")
+          .update(payload)
+          .eq("id", editingAssignment.id)
+          .select()
+          .single();
+
+        assignmentError = result.error;
+      } else {
+        const result = await supabase
+          .from("assignments")
+          .insert(payload)
+          .select()
+          .single();
+
+        assignmentError = result.error;
+      }
+
+      if (assignmentError) {
+        console.error(assignmentError);
+
+        if (uploadedNewFile && finalFilePath) {
+          await supabase.storage
+            .from("assignments")
+            .remove([finalFilePath]);
+        }
 
         setError(
-          `Couldn't create the assignment: ${insertError.message}`
+          editingAssignment
+            ? `Couldn't update the assignment: ${assignmentError.message}`
+            : `Couldn't create the assignment: ${assignmentError.message}`
         );
 
         return;
       }
 
-      setAssignmentTitle("");
-      setAssignmentDescription("");
-      setAssignmentDueDate("");
-      setAssignmentFile(null);
+      resetAssignmentForm();
       setShowAssignmentForm(false);
-
-      const fileInput = document.getElementById(
-        "assignment-file"
-      ) as HTMLInputElement | null;
-
-      if (fileInput) {
-        fileInput.value = "";
-      }
-
+      setSuccessMessage(
+        editingAssignment
+          ? "Assignment updated successfully."
+          : "Assignment created successfully."
+      );
       await loadAdminData();
     } catch (error) {
       console.error(error);
 
       setError(
-        "Something went wrong while creating the assignment."
+        editingAssignment
+          ? "Something went wrong while updating the assignment."
+          : "Something went wrong while creating the assignment."
       );
     } finally {
       setCreatingAssignment(false);
@@ -785,13 +879,19 @@ export default function AdminPage() {
         {showForm && (
           <div className="mt-8">
             <QuizForm
+              initialQuiz={editingQuiz}
+              initialQuestions={editingQuizQuestions}
               onCreated={() => {
                 setShowForm(false);
+                setEditingQuiz(null);
+                setEditingQuizQuestions([]);
                 loadAdminData();
               }}
-              onCancel={() =>
-                setShowForm(false)
-              }
+              onCancel={() => {
+                setShowForm(false);
+                setEditingQuiz(null);
+                setEditingQuizQuestions([]);
+              }}
             />
           </div>
         )}
@@ -801,12 +901,13 @@ export default function AdminPage() {
           <section className="mt-8 rounded-2xl border border-white/10 bg-white/[0.03] p-6 shadow-xl">
             <div className="mb-6">
               <h2 className="font-display text-xl font-semibold text-white">
-                Create Assignment
+                {editingAssignment ? "Edit Assignment" : "Create Assignment"}
               </h2>
 
               <p className="mt-1 text-sm text-neutral-500">
-                Upload an assignment file for your
-                students.
+                {editingAssignment
+                  ? "Update the assignment details and file."
+                  : "Upload an assignment file for your students."}
               </p>
             </div>
 
@@ -919,9 +1020,10 @@ export default function AdminPage() {
               <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
                 <button
                   type="button"
-                  onClick={() =>
-                    setShowAssignmentForm(false)
-                  }
+                  onClick={() => {
+                    setShowAssignmentForm(false);
+                    resetAssignmentForm();
+                  }}
                   disabled={
                     creatingAssignment
                   }
@@ -932,15 +1034,19 @@ export default function AdminPage() {
 
                 <button
                   type="button"
-                  onClick={createAssignment}
+                  onClick={saveAssignment}
                   disabled={
                     creatingAssignment
                   }
                   className="focus-ring rounded-xl bg-crimson px-6 py-3 text-sm font-semibold text-white hover:bg-crimson-bright disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {creatingAssignment
-                    ? "Uploading..."
-                    : "Create Assignment"}
+                    ? editingAssignment
+                      ? "Saving..."
+                      : "Uploading..."
+                    : editingAssignment
+                      ? "Save Changes"
+                      : "Create Assignment"}
                 </button>
               </div>
             </div>
@@ -1029,6 +1135,15 @@ export default function AdminPage() {
                               {quiz.published
                                 ? "Unpublish"
                                 : "Publish"}
+                            </button>
+
+                            <button
+                              onClick={() =>
+                                openEditQuiz(quiz)
+                              }
+                              className="focus-ring rounded-md border border-neutral-800 px-2.5 py-1.5 text-xs text-neutral-300 hover:border-crimson/50 hover:text-white"
+                            >
+                              Edit
                             </button>
 
                             <button
@@ -1208,9 +1323,10 @@ export default function AdminPage() {
 
             <button
               type="button"
-              onClick={() =>
-                setShowAssignmentForm(true)
-              }
+              onClick={() => {
+                resetAssignmentForm();
+                setShowAssignmentForm(true);
+              }}
               className="focus-ring rounded-lg border border-neutral-800 px-3 py-2 text-xs text-neutral-300 hover:border-crimson/50 hover:text-white"
             >
               + New Assignment
@@ -1294,7 +1410,19 @@ export default function AdminPage() {
                           </td>
 
                           <td className="px-5 py-4">
-                            <div className="flex justify-end">
+                            <div className="flex justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  openEditAssignment(
+                                    assignment
+                                  )
+                                }
+                                className="focus-ring rounded-md border border-neutral-800 px-2.5 py-1.5 text-xs text-neutral-300 hover:border-crimson/50 hover:text-white"
+                              >
+                                Edit
+                              </button>
+
                               <button
                                 type="button"
                                 onClick={() =>

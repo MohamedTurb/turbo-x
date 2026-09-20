@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { supabaseBrowser } from "@/lib/supabase-browser";
-import type { QuestionDraft } from "@/lib/types";
+import type { QuestionDraft, Quiz } from "@/lib/types";
 import QuestionForm from "./QuestionForm";
 
 function emptyQuestion(): QuestionDraft {
@@ -17,31 +17,62 @@ function emptyQuestion(): QuestionDraft {
   };
 }
 
+function toQuestionDraft(question: {
+  question_text: string;
+  options?: string[] | null;
+  correct_answer: string;
+  points: number;
+}): QuestionDraft {
+  const options = question.options ?? [];
+
+  return {
+    question_text: question.question_text,
+    option_1: options[0] ?? "",
+    option_2: options[1] ?? "",
+    option_3: options[2] ?? "",
+    option_4: options[3] ?? "",
+    correct_answer: question.correct_answer,
+    points: question.points,
+  };
+}
+
 interface QuizFormProps {
   onCreated: () => void;
   onCancel: () => void;
+  initialQuiz?: Quiz | null;
+  initialQuestions?: QuestionDraft[] | null;
 }
 
 export default function QuizForm({
   onCreated,
   onCancel,
+  initialQuiz,
+  initialQuestions,
 }: QuizFormProps) {
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
-  const [published, setPublished] = useState(false);
+  const isEditing = Boolean(initialQuiz);
+
+  const [title, setTitle] = useState(initialQuiz?.title ?? "");
+  const [description, setDescription] = useState(
+    initialQuiz?.description ?? ""
+  );
+  const [published, setPublished] = useState(
+    initialQuiz?.published ?? false
+  );
 
   // null = No Limit
   const [durationMinutes, setDurationMinutes] = useState<number | null>(
-    null
+    initialQuiz?.duration_minutes ?? null
   );
 
-  const [questions, setQuestions] = useState<QuestionDraft[]>([
-    emptyQuestion(),
-  ]);
+  const [questions, setQuestions] = useState<QuestionDraft[]>(
+    initialQuestions && initialQuestions.length > 0
+      ? initialQuestions
+      : [emptyQuestion()]
+  );
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState(false);
+  const [success, setSuccess] = useState<string | null>(null);
 
   function updateQuestion(index: number, next: QuestionDraft) {
     setQuestions((prev) =>
@@ -98,7 +129,7 @@ export default function QuizForm({
     e.preventDefault();
 
     setError(null);
-    setSuccess(false);
+    setSuccess(null);
 
     const validationError = validate();
 
@@ -112,33 +143,8 @@ export default function QuizForm({
     const supabase = supabaseBrowser();
 
     try {
-      /*
-       * Create Quiz
-       */
-      const { data: quiz, error: quizError } =
-        await supabase
-          .from("quizzes")
-          .insert({
-            title: title.trim(),
-            description: description.trim() || null,
-            published,
-            duration_minutes: durationMinutes,
-          })
-          .select("id")
-          .single();
-
-      if (quizError || !quiz) {
-        throw new Error(
-          quizError?.message ||
-            "Could not create the quiz."
-        );
-      }
-
-      /*
-       * Create Questions
-       */
       const rows = questions.map((q) => ({
-        quiz_id: quiz.id,
+        quiz_id: initialQuiz?.id,
         question_text: q.question_text.trim(),
         options: [
           q.option_1.trim(),
@@ -150,25 +156,83 @@ export default function QuizForm({
         points: q.points,
       }));
 
-      const { error: questionsError } =
-        await supabase
-          .from("questions")
-          .insert(rows);
+      if (isEditing && initialQuiz) {
+        const { error: quizError } = await supabase
+          .from("quizzes")
+          .update({
+            title: title.trim(),
+            description: description.trim() || null,
+            published,
+            duration_minutes: durationMinutes,
+          })
+          .eq("id", initialQuiz.id);
 
-      if (questionsError) {
-        throw new Error(questionsError.message);
+        if (quizError) {
+          throw new Error(quizError.message || "Could not update the quiz.");
+        }
+
+        const { error: deleteError } = await supabase
+          .from("questions")
+          .delete()
+          .eq("quiz_id", initialQuiz.id);
+
+        if (deleteError) {
+          throw new Error(deleteError.message || "Could not replace quiz questions.");
+        }
+
+        const { error: questionsError } = await supabase
+          .from("questions")
+          .insert(
+            rows.map((row) => ({
+              ...row,
+              quiz_id: initialQuiz.id,
+            }))
+          );
+
+        if (questionsError) {
+          throw new Error(questionsError.message);
+        }
+      } else {
+        const { data: quiz, error: quizError } = await supabase
+          .from("quizzes")
+          .insert({
+            title: title.trim(),
+            description: description.trim() || null,
+            published,
+            duration_minutes: durationMinutes,
+          })
+          .select("id")
+          .single();
+
+        if (quizError || !quiz) {
+          throw new Error(quizError?.message || "Could not create the quiz.");
+        }
+
+        const { error: questionsError } = await supabase
+          .from("questions")
+          .insert(
+            rows.map((row) => ({
+              ...row,
+              quiz_id: quiz.id,
+            }))
+          );
+
+        if (questionsError) {
+          throw new Error(questionsError.message);
+        }
       }
 
-      /*
-       * Success
-       */
-      setSuccess(true);
+      setSuccess(
+        isEditing ? "Quiz updated successfully." : "Quiz created successfully."
+      );
 
-      setTitle("");
-      setDescription("");
-      setPublished(false);
-      setDurationMinutes(null);
-      setQuestions([emptyQuestion()]);
+      if (!isEditing) {
+        setTitle("");
+        setDescription("");
+        setPublished(false);
+        setDurationMinutes(null);
+        setQuestions([emptyQuestion()]);
+      }
 
       onCreated();
     } catch (err) {
@@ -190,7 +254,7 @@ export default function QuizForm({
       {/* Header */}
       <div className="mb-6 flex items-center justify-between">
         <h2 className="font-display text-xl font-semibold text-white">
-          Create quiz
+          {isEditing ? "Edit quiz" : "Create quiz"}
         </h2>
 
         <button
@@ -212,7 +276,7 @@ export default function QuizForm({
       {/* Success */}
       {success && (
         <div className="mb-5 rounded-lg border border-emerald-700/40 bg-emerald-900/20 px-4 py-3 text-sm text-emerald-400">
-          Quiz created successfully.
+          {success}
         </div>
       )}
 
