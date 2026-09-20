@@ -40,6 +40,7 @@ export default function QuizPage() {
   const [submitting, setSubmitting] = useState(false);
   const [showSubmitModal, setShowSubmitModal] = useState(false);
   const [result, setResult] = useState<QuizResult | null>(null);
+  const [alreadyAttempted, setAlreadyAttempted] = useState(false);
 
   /*
    * Load quiz
@@ -105,6 +106,24 @@ export default function QuizPage() {
 
         setQuiz(quizData as Quiz);
 
+        const { data: existingAttempt, error: existingAttemptError } =
+          await supabase
+            .from("quiz_attempts")
+            .select("id")
+            .eq("quiz_id", quizId)
+            .eq("student_id", profileData.id)
+            .limit(1);
+
+        if (existingAttemptError) {
+          console.error(existingAttemptError);
+        }
+
+        if ((existingAttempt ?? []).length > 0) {
+          setAlreadyAttempted(true);
+          setLoading(false);
+          return;
+        }
+
         /*
          * Load questions
          */
@@ -151,7 +170,7 @@ export default function QuizPage() {
    * Submit quiz
    */
   const handleSubmit = useCallback(async () => {
-    if (!profile || !quiz || submitting || result) {
+    if (!profile || !quiz || submitting || result || alreadyAttempted || alreadyAttempted) {
       return;
     }
 
@@ -212,6 +231,7 @@ export default function QuizPage() {
         correct,
         wrong,
       });
+      setAlreadyAttempted(true);
     } catch (error) {
       console.error(error);
       alert("Something went wrong. Please try again.");
@@ -275,6 +295,17 @@ export default function QuizPage() {
    * Current question
    */
   const current = questions[currentQuestion];
+
+  const reviewedQuestions = questions.map((question) => {
+    const selectedAnswer = answers[question.id];
+    const isCorrect = selectedAnswer === question.correct_answer;
+
+    return {
+      ...question,
+      selectedAnswer,
+      isCorrect,
+    };
+  });
 
   /*
    * Answer statistics
@@ -449,6 +480,35 @@ export default function QuizPage() {
     );
   }
 
+  if (alreadyAttempted && !result) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-white">
+        {navbar}
+
+        <main className="flex min-h-[80vh] items-center justify-center px-6">
+          <div className="w-full max-w-lg rounded-3xl border border-white/10 bg-white/5 p-8 text-center backdrop-blur-xl">
+            <div className="mb-4 text-5xl">✅</div>
+
+            <h1 className="text-2xl font-bold">
+              You already completed this quiz
+            </h1>
+
+            <p className="mt-3 text-slate-400">
+              One attempt only is allowed for this exam.
+            </p>
+
+            <button
+              onClick={() => router.push("/dashboard")}
+              className="mt-6 rounded-xl bg-white px-6 py-3 font-semibold text-slate-950 transition hover:bg-slate-200"
+            >
+              Back to Dashboard
+            </button>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
   /*
    * RESULT SCREEN
    */
@@ -459,138 +519,155 @@ export default function QuizPage() {
       <div className="min-h-screen bg-slate-950 text-white">
         {navbar}
 
-        <main className="mx-auto flex min-h-[calc(100vh-80px)] max-w-5xl items-center justify-center px-6 py-12">
-          <div className="w-full">
-            <div className="mb-8 text-center">
-              <div className="mb-4 text-6xl">
-                {passed ? "🏆" : "📚"}
+        <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
+          <div className="mb-8 rounded-[28px] border border-white/10 bg-white/5 p-6 shadow-2xl backdrop-blur-xl sm:p-8">
+            <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <p className="text-sm font-medium uppercase tracking-[0.2em] text-slate-400">
+                  Quiz summary
+                </p>
+                <h1 className="mt-3 text-4xl font-black tracking-tight text-white">
+                  Your result
+                </h1>
+                <p className="mt-2 text-slate-400">
+                  {quiz.title}
+                </p>
               </div>
 
-              <h1 className="text-4xl font-black tracking-tight">
-                {passed
-                  ? "Congratulations!"
-                  : "Keep Practicing!"}
-              </h1>
-
-              <p className="mt-3 text-slate-400">
-                You have completed{" "}
-                <span className="font-semibold text-white">
-                  {quiz.title}
-                </span>
-              </p>
+              <div
+                className={`inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-bold ${
+                  passed
+                    ? "border border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
+                    : "border border-amber-500/30 bg-amber-500/10 text-amber-300"
+                }`}
+              >
+                <span>{passed ? "Passed" : "Needs review"}</span>
+              </div>
             </div>
 
-            <div className="rounded-3xl border border-white/10 bg-white/5 p-6 shadow-2xl backdrop-blur-xl md:p-10">
-              <div className="grid gap-8 md:grid-cols-2">
-                <div className="flex flex-col items-center justify-center">
-                  <div className="relative flex h-56 w-56 items-center justify-center rounded-full border-[14px] border-white/10">
-                    <div className="text-center">
-                      <div className="text-6xl font-black">
-                        {result.percentage}%
-                      </div>
-
-                      <div className="mt-1 text-sm text-slate-400">
-                        Final Score
-                      </div>
-                    </div>
-                  </div>
-
-                  <div
-                    className={`mt-6 rounded-full px-5 py-2 text-sm font-bold ${
-                      passed
-                        ? "bg-emerald-500/15 text-emerald-400"
-                        : "bg-amber-500/15 text-amber-400"
-                    }`}
-                  >
-                    {passed
-                      ? "✓ PASSED"
-                      : "KEEP PRACTICING"}
-                  </div>
+            <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <div className="rounded-2xl border border-white/10 bg-black/20 p-5">
+                <div className="text-sm text-slate-400">Final score</div>
+                <div className="mt-3 text-4xl font-black text-white">
+                  {result.percentage}<span className="text-lg text-slate-500">%</span>
                 </div>
+              </div>
 
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="rounded-2xl border border-white/10 bg-black/20 p-5">
-                    <div className="text-sm text-slate-400">
-                      Score
-                    </div>
+              <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-5">
+                <div className="text-sm text-slate-400">Correct</div>
+                <div className="mt-3 text-4xl font-black text-emerald-400">
+                  {result.correct}
+                </div>
+              </div>
 
-                    <div className="mt-2 text-3xl font-black">
-                      {result.score}
-                      <span className="text-lg text-slate-500">
-                        {" "}
-                        / {result.totalPoints}
+              <div className="rounded-2xl border border-red-500/20 bg-red-500/5 p-5">
+                <div className="text-sm text-slate-400">Wrong</div>
+                <div className="mt-3 text-4xl font-black text-red-400">
+                  {result.wrong}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-white/10 bg-black/20 p-5">
+                <div className="text-sm text-slate-400">Points</div>
+                <div className="mt-3 text-4xl font-black text-white">
+                  {result.score}<span className="text-lg text-slate-500">/{result.totalPoints}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-8">
+              <div className="mb-3 flex items-center justify-between text-sm text-slate-400">
+                <span>Overall performance</span>
+                <span className="font-semibold text-white">{result.percentage}%</span>
+              </div>
+
+              <div className="h-3 overflow-hidden rounded-full bg-white/10">
+                <div
+                  className={`h-full rounded-full transition-all duration-700 ${
+                    passed ? "bg-emerald-400" : "bg-amber-400"
+                  }`}
+                  style={{ width: `${result.percentage}%` }}
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-8 rounded-[28px] border border-white/10 bg-white/5 p-6 shadow-xl backdrop-blur-xl sm:p-8">
+            <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="text-2xl font-black text-white">Answer review</h2>
+                <p className="mt-1 text-sm text-slate-400">
+                  Compare your answers with the correct ones below.
+                </p>
+              </div>
+
+              <button
+                onClick={() => router.push("/dashboard")}
+                className="rounded-xl bg-white px-5 py-3 text-sm font-bold text-slate-950 transition hover:bg-slate-200"
+              >
+                Back to dashboard
+              </button>
+            </div>
+
+            <div className="space-y-5">
+              {reviewedQuestions.map((question, index) => {
+                const selectedAnswer = question.selectedAnswer;
+                const correctAnswer = question.correct_answer;
+                const isCorrect = question.isCorrect;
+
+                return (
+                  <div
+                    key={question.id}
+                    className="rounded-2xl border border-white/10 bg-black/20 p-5"
+                  >
+                    <div className="mb-4 flex items-start justify-between gap-3">
+                      <p className="text-base font-bold leading-relaxed text-white">
+                        {index + 1}. {question.question_text}
+                      </p>
+                      <span
+                        className={`rounded-full px-2.5 py-1 text-xs font-bold ${
+                          isCorrect
+                            ? "bg-emerald-500/15 text-emerald-300"
+                            : "bg-red-500/15 text-red-300"
+                        }`}
+                      >
+                        {isCorrect ? "Correct" : "Wrong"}
                       </span>
                     </div>
+
+                    <div className="space-y-2">
+                      {question.options.map((option, optionIndex) => {
+                        const letter = String.fromCharCode(65 + optionIndex);
+                        const isSelected = selectedAnswer === option;
+                        const isCorrectOption = correctAnswer === option;
+
+                        return (
+                          <div
+                            key={`${question.id}-${optionIndex}`}
+                            className={`rounded-xl border px-3 py-2 text-sm ${
+                              isCorrectOption
+                                ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                                : isSelected
+                                ? "border-red-500/40 bg-red-500/10 text-red-300"
+                                : "border-white/10 bg-white/5 text-slate-300"
+                            }`}
+                          >
+                            <span className="font-bold">{letter}.</span> {option}
+                            {isCorrectOption && " • Correct answer"}
+                            {isSelected && !isCorrectOption && " • Your answer"}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {!isCorrect && (
+                      <div className="mt-4 rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 text-sm text-emerald-300">
+                        Correct answer: <span className="font-bold">{correctAnswer}</span>
+                      </div>
+                    )}
                   </div>
-
-                  <div className="rounded-2xl border border-white/10 bg-black/20 p-5">
-                    <div className="text-sm text-slate-400">
-                      Questions
-                    </div>
-
-                    <div className="mt-2 text-3xl font-black">
-                      {questions.length}
-                    </div>
-                  </div>
-
-                  <div className="rounded-2xl border border-emerald-500/10 bg-emerald-500/5 p-5">
-                    <div className="text-sm text-slate-400">
-                      Correct
-                    </div>
-
-                    <div className="mt-2 text-3xl font-black text-emerald-400">
-                      {result.correct}
-                    </div>
-                  </div>
-
-                  <div className="rounded-2xl border border-red-500/10 bg-red-500/5 p-5">
-                    <div className="text-sm text-slate-400">
-                      Wrong
-                    </div>
-
-                    <div className="mt-2 text-3xl font-black text-red-400">
-                      {result.wrong}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-10">
-                <div className="mb-3 flex items-center justify-between text-sm">
-                  <span className="text-slate-400">
-                    Overall Performance
-                  </span>
-
-                  <span className="font-bold">
-                    {result.percentage}%
-                  </span>
-                </div>
-
-                <div className="h-3 overflow-hidden rounded-full bg-white/10">
-                  <div
-                    className="h-full rounded-full bg-white transition-all duration-700"
-                    style={{
-                      width: `${result.percentage}%`,
-                    }}
-                  />
-                </div>
-              </div>
-
-              <div className="mt-10 flex flex-col gap-3 sm:flex-row">
-                <button
-                  onClick={() => router.push("/dashboard")}
-                  className="flex-1 rounded-xl bg-white px-6 py-4 font-bold text-slate-950 transition hover:bg-slate-200"
-                >
-                  Back to Dashboard
-                </button>
-
-                <button
-                  onClick={() => router.push("/grades")}
-                  className="flex-1 rounded-xl border border-white/10 bg-white/5 px-6 py-4 font-bold text-white transition hover:bg-white/10"
-                >
-                  View My Grades
-                </button>
-              </div>
+                );
+              })}
             </div>
           </div>
         </main>
